@@ -11,4 +11,4 @@ Projenin final kısmının videosu final raporunda yer almaktadır. Yapılan pro
 
 **Dersi veren:** Öğr. Gör. Enver BAĞCI
 
-- Ali Furkan Şahin
+**Öğrenci ismi:** Ali Furkan Şahin
