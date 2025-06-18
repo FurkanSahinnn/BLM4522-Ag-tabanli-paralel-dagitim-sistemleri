@@ -1,0 +1,1 @@
+-- Bu kısımda herhangi bir sql kodu yazilmadi. Mssql arayuzu uzerinden yapildi.
