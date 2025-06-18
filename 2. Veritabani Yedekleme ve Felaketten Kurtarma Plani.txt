@@ -1,0 +1,72 @@
+# Tam Artik ve Fark Yedekleme
+
+-------------------------------------------------------------------------------------------
+SELECT name, recovery_model_desc
+FROM sys.databases
+WHERE name = 'model';
+
+USE [master]
+ALTER DATABASE AdventureWorks2022 SET RECOVERY FULL;
+
+BACKUP DATABASE AdventureWorks2022
+TO DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_FULL.bak'
+WITH INIT, FORMAT, NAME = 'Full Backup';
+GO
+
+BACKUP DATABASE AdventureWorks2022
+TO DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_DIFF.bak'
+WITH DIFFERENTIAL,
+     INIT,
+     NAME = 'Differential Backup';
+GO
+
+BACKUP LOG AdventureWorks2022
+TO DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_LOG.trn'
+WITH INIT,
+     NAME = 'Log Backup'; -- Transaction Backup
+GO
+-------------------------------------------------------------------------------------------
+İlk sorgu, model adlı veri tabanının kurtarma modelini listeler.
+Daha sonra AdventureWorks2022 veri tabanı FULL recovery modeline alınır.
+Bu model, tam + fark + log yedekleme destekler ve zaman noktasına dönmeye izin verir.
+
+# Felaketten Kurtarma Senaryolari
+-------------------------------------------------------------------------------------------
+DROP TABLE Person.EmailAddress;
+SELECT * FROM Person.EmailAddress;
+-------------------------------------------------------------------------------------------
+İlk sorgu, kaza sonucu veri kaybını simüle eder. DROP TABLE ile tablo silinir.
+Ardından sorgu çalıştırılarak tablonun artık erişilemediği doğrulanır.
+
+-------------------------------------------------------------------------------------------
+RESTORE DATABASE AdventureWorks2022_Restore
+FROM DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_FULL.bak'
+WITH
+    MOVE 'AdventureWorks2022' TO 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_Restore.mdf',
+    MOVE 'AdventureWorks2022_log' TO 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022_Restore_log.ldf',
+    REPLACE;
+-------------------------------------------------------------------------------------------
+Daha önce alınan .bak dosyası kullanılarak, AdventureWorks2022 veri tabanı AdventureWorks2022_Restore adıyla geri yüklenir.
+MOVE komutları, MDF ve LDF dosyalarının yeni ad ve yollarla oluşturulmasını sağlar.
+REPLACE → Eğer aynı isimde veri tabanı varsa üzerine yazmak için izin verir.
+
+# Test Yedekleme Senaryolari
+-------------------------------------------------------------------------------------------
+RESTORE VERIFYONLY
+FROM DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022Full.bak'
+-------------------------------------------------------------------------------------------
+Bu dosya olduğu için restore edebilir.
+
+-------------------------------------------------------------------------------------------
+RESTORE VERIFYONLY
+FROM DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AW2022.bak'
+-------------------------------------------------------------------------------------------
+Bu dosya olduğu için restore edebilir.
+
+
+-------------------------------------------------------------------------------------------
+-- Invalid
+RESTORE VERIFYONLY
+FROM DISK = 'C:\Program Files\Microsoft SQL Server\MSSQL16.MSSQLEVAL2022\MSSQL\Backup\AdventureWorks2022.bak'
+-------------------------------------------------------------------------------------------
+Bu dosya olmadığı için restore etmez.

@@ -1,0 +1,156 @@
+# Indeks Yönetimi
+
+-------------------------------------------------------------------------------------------
+SELECT 
+    OBJECT_NAME(i.object_id) AS TableName,
+    i.name AS IndexName,
+    i.type_desc,
+    ISNULL(s.user_seeks, 0) AS user_seeks,
+    ISNULL(s.user_scans, 0) AS user_scans,
+    ISNULL(s.user_lookups, 0) AS user_lookups,
+    ISNULL(s.user_updates, 0) AS user_updates,
+    s.last_user_seek,
+    s.last_user_scan,
+    s.last_user_lookup
+FROM sys.indexes i
+LEFT JOIN sys.dm_db_index_usage_stats s
+    ON i.object_id = s.object_id AND i.index_id = s.index_id
+WHERE OBJECTPROPERTY(i.object_id, 'IsUserTable') = 1
+  AND i.name IS NOT NULL
+ORDER BY (ISNULL(s.user_seeks, 0) + ISNULL(s.user_scans, 0) + ISNULL(s.user_lookups, 0)) ASC;
+-------------------------------------------------------------------------------------------
+
+Bu sorgu, veritabanındaki kullanıcı tablolarında tanımlı indekslerin kullanım istatistiklerini getirir. user_seeks, user_scans, user_lookups, user_updates gibi metrikler, indeksin ne kadar aktif kullanıldığını gösterir. Kullanılmayan indeksler tespit edilir.
+
+SELECT * FROM Sales.Store
+DROP INDEX IX_Store_SalesPersonID ON Sales.Store;
+SELECT * FROM Sales.Store
+
+SELECT * FROM Person.Address
+DROP INDEX IX_Address_AddressLine1_AddressLine2_City_StateProvinceID_PostalCode ON Person.Address;
+SELECT * FROM Person.Address
+
+Bu iki sorgu ilk yazılan sorgunun çıktısına göre yazılmıştır ve bu çıktıdan belirlenen tabloların indeksini kaldırır. Amaç, veritabanı üzerinde gereksiz indeks yükünü azaltmak ve sorgu motorunun daha hızlı çalışmasını sağlamak.
+
+# Sorgu İyileştirme
+-------------------------------------------------------------------------------------------
+SELECT * 
+FROM Sales.SalesOrderDetail
+WHERE ProductID IN (
+    SELECT ProductID 
+    FROM Production.Product
+    WHERE Name LIKE '%Road%'
+);
+-------------------------------------------------------------------------------------------
+Bu sorgu subquery içerir. Bu performansı düşürebilir.
+
+-------------------------------------------------------------------------------------------
+SELECT sod.*
+FROM Sales.SalesOrderDetail sod
+JOIN Production.Product p ON sod.ProductID = p.ProductID
+WHERE p.Name LIKE '%Road%';
+-------------------------------------------------------------------------------------------
+Burada JOIN kullanılarak aynı sonuç daha verimli şekilde alınmış. JOIN’li yapı, subquery’e göre genellikle daha hızlıdır fakat bazı durumlarda daha uzun sürebilir.
+
+-------------------------------------------------------------------------------------------
+SELECT sod.SalesOrderID, sod.SalesOrderDetailID, sod.CarrierTrackingNumber
+FROM Sales.SalesOrderDetail sod
+JOIN Production.Product p ON sod.ProductID = p.ProductID
+WHERE p.Name LIKE '%Road%';
+-------------------------------------------------------------------------------------------
+Bu sorguda ise sadece belirli sütunlar alınarak gereksiz veri taşınmasının önüne geçilmiş.
+
+
+# Veri Yöneticisi Rolleri
+-------------------------------------------------------------------------------------------
+USE AdventureWorks2022;
+CREATE LOGIN report_user_login WITH PASSWORD = 'Report123!';
+CREATE LOGIN editor_user_login WITH PASSWORD = 'Edit123!';
+CREATE LOGIN admin_user_login  WITH PASSWORD = 'Admin123!';
+-------------------------------------------------------------------------------------------
+SQL Server seviyesinde üç adet kullanıcı oturumu (login) oluşturuluyor: report_user_login, editor_user_login, admin_user_login.
+Bunlar, veritabanına giriş yapabilecek dış kullanıcıları tanımlar.
+
+-------------------------------------------------------------------------------------------
+CREATE USER report_user FOR LOGIN report_user_login;
+CREATE USER editor_user FOR LOGIN editor_user_login;
+CREATE USER admin_user  FOR LOGIN admin_user_login;
+-------------------------------------------------------------------------------------------
+Bu login’lere karşılık olarak veritabanı içi kullanıcılar oluşturur. 
+
+-------------------------------------------------------------------------------------------
+CREATE ROLE report_role;
+CREATE ROLE editor_role;
+CREATE ROLE admin_role;
+-------------------------------------------------------------------------------------------
+Üç farklı rol (role) tanımlanıyor. Roller sayesinde birden fazla kullanıcıya aynı yetkiler verilebilir.
+
+-------------------------------------------------------------------------------------------
+GRANT SELECT ON SCHEMA::Sales TO report_role;
+GRANT SELECT, UPDATE ON SCHEMA::Sales TO editor_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::Sales TO admin_role;
+-------------------------------------------------------------------------------------------
+report_role → Sadece veri okuma izni verilir. Raporlamacıdır.
+editor_role → Okuma ve güncelleme izni verilir. Düzenleyicidir.
+admin_role → Tüm işlemler (SELECT, INSERT, UPDATE, DELETE) yetkisi vardır. Yöneticidir.
+
+-------------------------------------------------------------------------------------------
+EXEC sp_addrolemember 'report_role', 'report_user';
+EXEC sp_addrolemember 'editor_role', 'editor_user';
+EXEC sp_addrolemember 'admin_role', 'admin_user';
+-------------------------------------------------------------------------------------------
+Kullanıcılar ilgili rollere atanır.
+
+-------------------------------------------------------------------------------------------
+-- Report
+SELECT TOP 10 * FROM Sales.SalesOrderHeader;
+
+UPDATE Sales.SalesOrderHeader SET Comment = 'Test' WHERE SalesOrderID = 43659;
+-------------------------------------------------------------------------------------------
+SELECT çalışır. UPDATE çalışmaz.
+
+-------------------------------------------------------------------------------------------
+-- Editor
+SELECT * FROM Sales.SalesOrderHeader;
+
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659;
+UPDATE Sales.SalesOrderHeader SET Comment = 'Updated' WHERE SalesOrderID = 43659;
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659;
+
+DELETE FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659; -- İzin yok.
+-------------------------------------------------------------------------------------------
+SELECT ve UPDATE çalışır ama DELETE işlemi reddedilir.
+
+-------------------------------------------------------------------------------------------
+--Admin
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43660;
+UPDATE Sales.SalesOrderHeader SET Comment = 'Admin OK' WHERE SalesOrderID = 43660;
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43660;
+
+SELECT * FROM Sales.SalesOrderHeader WHERE RevisionNumber = 1;
+INSERT INTO [AdventureWorks2022].[Sales].[SalesOrderHeader] (RevisionNumber, OrderDate, DueDate, ShipDate, Status, OnlineOrderFlag,
+    PurchaseOrderNumber, AccountNumber, CustomerID, SalesPersonID, TerritoryID, BillToAddressID, ShipToAddressID,
+    ShipMethodID, CreditCardID, CreditCardApprovalCode, CurrencyRateID, SubTotal, TaxAmt, Freight, Comment, rowguid,
+    ModifiedDate
+)
+VALUES (
+    1, GETDATE(), DATEADD(DAY, 5, GETDATE()), DATEADD(DAY, 7, GETDATE()), 5, 1, N'PO99999', N'AC1234567', 11000, 279, 3,
+    1, 1, 4, 10, N'APPROVED123', 1, 100.00, 10.00, 5.00, N'Test Order Inserted', NEWID(), GETDATE()
+);
+-------------------------------------------------------------------------------------------
+UPDATE, INSERT, DELETE dahil tüm işlemleri yapabilir.
+
+
+
+
+
+
+
+
+
+
+
+
+
+
+

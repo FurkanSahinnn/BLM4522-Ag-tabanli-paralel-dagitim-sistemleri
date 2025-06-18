@@ -1,0 +1,163 @@
+# Erisim Yonetimi
+-------------------------------------------------------------------------------------------
+USE AdventureWorks2022;
+CREATE LOGIN report_user_login WITH PASSWORD = 'Report123!';
+CREATE LOGIN editor_user_login WITH PASSWORD = 'Edit123!';
+CREATE LOGIN admin_user_login  WITH PASSWORD = 'Admin123!';
+-------------------------------------------------------------------------------------------
+SQL Server seviyesinde üç adet kullanıcı oturumu (login) oluşturuluyor: report_user_login, editor_user_login, admin_user_login.
+Bunlar, veritabanına giriş yapabilecek dış kullanıcıları tanımlar.
+
+-------------------------------------------------------------------------------------------
+CREATE USER report_user FOR LOGIN report_user_login;
+CREATE USER editor_user FOR LOGIN editor_user_login;
+CREATE USER admin_user  FOR LOGIN admin_user_login;
+-------------------------------------------------------------------------------------------
+Bu login’lere karşılık olarak veritabanı içi kullanıcılar oluşturur. 
+
+-------------------------------------------------------------------------------------------
+CREATE ROLE report_role;
+CREATE ROLE editor_role;
+CREATE ROLE admin_role;
+-------------------------------------------------------------------------------------------
+Üç farklı rol (role) tanımlanıyor. Roller sayesinde birden fazla kullanıcıya aynı yetkiler verilebilir.
+
+-------------------------------------------------------------------------------------------
+GRANT SELECT ON SCHEMA::Sales TO report_role;
+GRANT SELECT, UPDATE ON SCHEMA::Sales TO editor_role;
+GRANT SELECT, INSERT, UPDATE, DELETE ON SCHEMA::Sales TO admin_role;
+-------------------------------------------------------------------------------------------
+report_role → Sadece veri okuma izni verilir. Raporlamacıdır.
+editor_role → Okuma ve güncelleme izni verilir. Düzenleyicidir.
+admin_role → Tüm işlemler (SELECT, INSERT, UPDATE, DELETE) yetkisi vardır. Yöneticidir.
+
+-------------------------------------------------------------------------------------------
+EXEC sp_addrolemember 'report_role', 'report_user';
+EXEC sp_addrolemember 'editor_role', 'editor_user';
+EXEC sp_addrolemember 'admin_role', 'admin_user';
+-------------------------------------------------------------------------------------------
+Kullanıcılar ilgili rollere atanır.
+
+-------------------------------------------------------------------------------------------
+-- Report
+SELECT TOP 10 * FROM Sales.SalesOrderHeader;
+
+UPDATE Sales.SalesOrderHeader SET Comment = 'Test' WHERE SalesOrderID = 43659;
+-------------------------------------------------------------------------------------------
+SELECT çalışır. UPDATE çalışmaz.
+
+-------------------------------------------------------------------------------------------
+-- Editor
+SELECT * FROM Sales.SalesOrderHeader;
+
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659;
+UPDATE Sales.SalesOrderHeader SET Comment = 'Updated' WHERE SalesOrderID = 43659;
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659;
+
+DELETE FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43659; -- İzin yok.
+-------------------------------------------------------------------------------------------
+SELECT ve UPDATE çalışır ama DELETE işlemi reddedilir.
+
+-------------------------------------------------------------------------------------------
+--Admin
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43660;
+UPDATE Sales.SalesOrderHeader SET Comment = 'Admin OK' WHERE SalesOrderID = 43660;
+SELECT SalesOrderID, Comment FROM Sales.SalesOrderHeader WHERE SalesOrderID = 43660;
+
+SELECT * FROM Sales.SalesOrderHeader WHERE RevisionNumber = 1;
+INSERT INTO [AdventureWorks2022].[Sales].[SalesOrderHeader] (RevisionNumber, OrderDate, DueDate, ShipDate, Status, OnlineOrderFlag,
+    PurchaseOrderNumber, AccountNumber, CustomerID, SalesPersonID, TerritoryID, BillToAddressID, ShipToAddressID,
+    ShipMethodID, CreditCardID, CreditCardApprovalCode, CurrencyRateID, SubTotal, TaxAmt, Freight, Comment, rowguid,
+    ModifiedDate
+)
+VALUES (
+    1, GETDATE(), DATEADD(DAY, 5, GETDATE()), DATEADD(DAY, 7, GETDATE()), 5, 1, N'PO99999', N'AC1234567', 11000, 279, 3,
+    1, 1, 4, 10, N'APPROVED123', 1, 100.00, 10.00, 5.00, N'Test Order Inserted', NEWID(), GETDATE()
+);
+-------------------------------------------------------------------------------------------
+UPDATE, INSERT, DELETE dahil tüm işlemleri yapabilir.
+
+
+# Veri Sifreleme
+-------------------------------------------------------------------------------------------
+/* https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/transparent-data-encryption?view=sql-server-ver16 */
+USE master;
+GO
+
+CREATE MASTER KEY ENCRYPTION BY PASSWORD = '<UseStrongPasswordHere>';
+GO
+
+CREATE CERTIFICATE MyServerCert
+    WITH SUBJECT = 'My DEK Certificate';
+GO
+
+USE AdventureWorks2022;
+GO
+
+CREATE DATABASE ENCRYPTION KEY
+    WITH ALGORITHM = AES_256
+    ENCRYPTION BY SERVER CERTIFICATE MyServerCert;
+GO
+
+ALTER DATABASE AdventureWorks2022
+    SET ENCRYPTION ON;
+GO
+
+
+/* https://learn.microsoft.com/en-us/sql/relational-databases/security/encryption/transparent-data-encryption?view=sql-server-ver16 */
+USE AdventureWorks2022;
+GO
+
+/* The value 3 represents an encrypted state
+   on the database and transaction logs. */
+SELECT *
+FROM sys.dm_database_encryption_keys
+WHERE encryption_state = 3;
+GO
+-------------------------------------------------------------------------------------------
+Verileri sifrelemek icin master key olusturuyoruz ve AES 256 bit ile sertifikayi sifreliyoruz. Sifre unutulursa database'e erismek imkansizdir.
+
+# SQL Injection Testleri
+-------------------------------------------------------------------------------------------
+CREATE TABLE Users (
+    UserID INT IDENTITY PRIMARY KEY,
+    Username NVARCHAR(50) NOT NULL,
+    Password NVARCHAR(50) NOT NULL,
+    Email NVARCHAR(100),
+    Role NVARCHAR(20),
+);
+
+INSERT INTO Users (Username, Password, Email, Role)
+VALUES 
+('admin', 'admin123', 'admin@example.com', 'admin'),
+('user1', 'userpass1', 'user1@example.com', 'user'),
+('user2', 'userpass2', 'user2@example.com', 'user'),
+('user3', 'userpass3', 'user3@example.com', 'user'),
+('guest', 'guestpass', 'guest@example.com', 'user'),
+('sysadmin', 'sys123', 'sys@example.com', 'admin');
+
+SELECT * FROM Users;
+
+-------
+USE TestSQLInjection
+ALTER TABLE Users
+ADD CONSTRAINT CK_Username_NoInjection
+CHECK (
+    Username NOT LIKE '%--%' AND
+    Username NOT LIKE '%''%' AND
+    Username NOT LIKE '%;%' AND
+    Username NOT LIKE '% OR %'
+);
+
+-------
+-------------------------------------------------------------------------------------------
+Basit kullanıcı tablosunda injection açığını gösterir ve CHECK constraint ile koruma sağlar.
+
+# Audit Loglari
+-------------------------------------------------------------------------------------------
+SELECT *
+FROM sys.fn_get_audit_file('D:\SQLAudits\AdventureWorks2022Audit_9290E345-40DC-491E-BAAE-E5D8D259E754_0_133898732858930000.sqlaudit',
+	NULL, 
+	NULL);
+-------------------------------------------------------------------------------------------
+sys.fn_get_audit_file fonksiyonu, SQL Server Audit tarafından oluşturulan log dosyasını okumak için kullanılır.
