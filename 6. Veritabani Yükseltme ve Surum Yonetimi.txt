@@ -1,0 +1,83 @@
+-- Mevcut Uyum Seviyesi Kontrolü
+SELECT name, compatibility_level  
+FROM sys.databases  
+WHERE name = 'AdventureWorks2019';
+
+-------------------------------------------------------------------------------------------
+
+-- Yükseltme Öncesi Yedek Alma
+BACKUP DATABASE AdventureWorks2019
+TO DISK = 'C:\Backup\AdventureWorks2019_PreUpgrade.bak'
+WITH INIT, COMPRESSION;
+
+-------------------------------------------------------------------------------------------
+
+-- Uyum Seviyesini Yükseltme (2019 --> 2022)
+ALTER DATABASE AdventureWorks2019
+SET COMPATIBILITY_LEVEL = 160; 
+
+-------------------------------------------------------------------------------------------
+
+-- Şema Değişikliği Log Tablosu Oluşturma
+CREATE TABLE dbo.SchemaChangeLog (
+    ID INT IDENTITY PRIMARY KEY,
+    EventType NVARCHAR(100),
+    EventDDL NVARCHAR(MAX),
+    EventTime DATETIME,
+    ChangedBy NVARCHAR(100)
+);
+
+-------------------------------------------------------------------------------------------
+
+-- DDL Trigger ile Değişiklik Kaydı
+CREATE TRIGGER trg_DDL_Change_Log
+ON DATABASE
+FOR DDL_DATABASE_LEVEL_EVENTS
+AS
+BEGIN
+    INSERT INTO dbo.SchemaChangeLog(EventType, EventDDL, EventTime, ChangedBy)
+    SELECT EVENTDATA().value('(/EVENT_INSTANCE/EventType)[1]', 'NVARCHAR(100)'),
+           EVENTDATA().value('(/EVENT_INSTANCE/TSQLCommand/CommandText)[1]', 'NVARCHAR(MAX)'),
+           GETDATE(),
+           SYSTEM_USER;
+END;
+
+-------------------------------------------------------------------------------------------
+
+-- Şema Değişikliği: Sütun Ekleme
+ALTER TABLE Person.Person ADD InstagramHandle NVARCHAR(100);
+
+-------------------------------------------------------------------------------------------
+
+-- Değişiklik Günlüğünü Görüntüleme
+SELECT * FROM dbo.SchemaChangeLog ORDER BY EventTime DESC;
+
+-------------------------------------------------------------------------------------------
+
+-- Fonksiyon Çağrısı (Test Amaçlı)
+EXEC dbo.uspGetEmployeeManagers @BusinessEntityID = 1;
+
+-------------------------------------------------------------------------------------------
+
+-- Kayıt Sayısı Kontrolü
+SELECT COUNT(*) FROM HumanResources.Employee;
+
+-------------------------------------------------------------------------------------------
+
+-- Eksik İndeks Analizi
+SELECT * FROM sys.dm_db_missing_index_details;
+
+-------------------------------------------------------------------------------------------
+
+-- Geri Dönüş (Restore)
+RESTORE DATABASE AdventureWorks2019
+FROM DISK = 'C:\Backup\AdventureWorks2019_PreUpgrade.bak'
+WITH REPLACE;
+
+-------------------------------------------------------------------------------------------
+
+-- Trigger’ı Kaldırma
+DROP TRIGGER trg_DDL_Change_Log ON DATABASE;
+
+-------------------------------------------------------------------------------------------
+
